@@ -126,14 +126,6 @@ jobs:
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=true -Dorg.gradle.parallel=true -Dorg.gradle.configureondemand=true"
 
-      - name: Upload build artifacts
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          key: build-artifacts-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            build/libs/
-            build/reports/
 
   publish-maven:
     name: Publish to Maven
@@ -174,37 +166,10 @@ jobs:
           echo "- Version: ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ✅ Published successfully" >> $GITHUB_STEP_SUMMARY
 
-  publish-platforms:
-    name: Publish to CurseForge & Modrinth
-    runs-on: ubuntu-latest
-    needs: [validate, build]
-    if: ${{ needs.validate.outputs.should-publish == 'true' && inputs.publishCurseForgeAndModrinth }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1000
-          fetch-tags: true
-
-      - name: Download build artifacts
-        uses: actions/cache/restore@v4
-        with:
-          key: build-artifacts-Main Build-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/
-          fail-on-cache-miss: true
-
-      - name: Verify build artifacts
-        run: |
-          if [ ! -d "build/libs" ] || [ -z "$(ls -A build/libs)" ]; then
-            echo "❌ Build artifacts not found!"
-            echo "Available files in build/:"
-            find build/ -type f -name "*.jar" || echo "No JAR files found"
-            exit 1
-          fi
-          echo "✅ Build artifacts verified:"
-          ls -la build/libs/
-
+      # Publish to CurseForge & Modrinth：并入 build job——同 run 跨 job
+      # 的 cache 传产物实测不可靠，jar 留在本 job 工作区直接用。
       - name: Publish to CurseForge and Modrinth
+        if: ${{ needs.validate.outputs.should-publish == 'true' && inputs.publishCurseForgeAndModrinth }}
         uses: Kir-Antipov/mc-publish@v3.3
         with:
           modrinth-id: B1CBVXHX
@@ -246,7 +211,7 @@ jobs:
   summary:
     name: Build & Publish Summary
     runs-on: ubuntu-latest
-    needs: [validate, build, publish-maven, publish-platforms]
+    needs: [validate, build, publish-maven]
     if: always()
     steps:
       - name: Generate final summary
@@ -265,7 +230,8 @@ jobs:
           VALIDATE_STATUS="${{ needs.validate.result }}"
           BUILD_STATUS="${{ needs.build.result }}"
           MAVEN_STATUS="${{ needs.publish-maven.result }}"
-          PLATFORM_STATUS="${{ needs.publish-platforms.result }}"
+          # 平台发布已并入 build job：它的结果即 build 的结果。
+          PLATFORM_STATUS="${{ needs.build.result }}"
           
           echo "- **Validation**: $([ "$VALIDATE_STATUS" == "success" ] && echo "✅ Success" || echo "❌ $VALIDATE_STATUS")" >> $GITHUB_STEP_SUMMARY
           echo "- **Build**: $([ "$BUILD_STATUS" == "success" ] && echo "✅ Success" || echo "❌ $BUILD_STATUS")" >> $GITHUB_STEP_SUMMARY
@@ -306,10 +272,8 @@ jobs:
               exit 1
             fi
           
-            if [[ "${{ inputs.publishCurseForgeAndModrinth }}" == "true" && "${{ needs.publish-platforms.result }}" != "success" ]]; then
-              echo "Platform publish failed, marking workflow as failed"
-              exit 1
-            fi
+            # 平台发布在 build job 内执行；build != success 已在上面拦截。
+
           fi
           
           echo "All requested operations completed successfully!"
